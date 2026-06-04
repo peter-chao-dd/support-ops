@@ -371,52 +371,37 @@ function renderPctChart(baseData) {
   const splitVals=splitKey?[...new Set(data.map(r=>r[splitKey]))].sort():['all'];
   const palette=split==='vendor'?VENDOR_COLORS:split==='status'?STATUS_COLORS:null;
 
-  // Aggregate: splitVal -> bucket -> outcome -> count
-  const agg={};
-  for(const r of data){
-    const sv=splitKey?r[splitKey]:'all';
-    const bk=getBucketKey(r.date,gran);
-    if(!agg[sv])agg[sv]={};
-    if(!agg[sv][bk])agg[sv][bk]={};
-    // Use ALL outcomes for denominator (ignore outcome filter for % base so bars always sum to 100)
-    agg[sv][bk][r.outcome]=(agg[sv][bk][r.outcome]||0)+r.count;
-  }
-
-  // But we also need the full-outcome totals per bucket per splitVal
-  // Re-aggregate from RAW for denominator (apply all filters except outcome filter)
+  // Single source of truth: aggregate from RAW with all filters EXCEPT outcome,
+  // so numerator and denominator always come from the same data.
   const dFrom=document.getElementById('f-date-from').value;
   const dTo=document.getElementById('f-date-to').value;
   const vendors=getSelected('f-vendor');
   const statuses=getSelected('f-status');
   const rawFiltered=RAW.filter(r=>r.date>=dFrom&&r.date<=dTo&&vendors.includes(r.vendor)&&statuses.includes(r.status));
-  const rawWindowed=(() => {
-    const days=parseInt(document.getElementById('pct-window').value);
-    if(!days) return rawFiltered;
-    const cutoff=new Date('2026-06-01');
-    cutoff.setDate(cutoff.getDate()-days+1);
-    return rawFiltered.filter(r=>r.date>=cutoff.toISOString().slice(0,10));
-  })();
-  const denom={};
+  const rawWindowed=applyWindow(rawFiltered,'pct-window');
+
+  // fullAgg[splitVal][bucket][outcome] = count
+  const fullAgg={};
   for(const r of rawWindowed){
     const sv=splitKey?r[splitKey]:'all';
     const bk=getBucketKey(r.date,gran);
-    if(!denom[sv])denom[sv]={};
-    denom[sv][bk]=(denom[sv][bk]||0)+r.count;
+    if(!fullAgg[sv])fullAgg[sv]={};
+    if(!fullAgg[sv][bk])fullAgg[sv][bk]={};
+    fullAgg[sv][bk][r.outcome]=(fullAgg[sv][bk][r.outcome]||0)+r.count;
   }
 
   const selectedOutcomes=getSelected('f-outcome');
   const datasets=[];
 
   if(split==='combined') {
-    // One dataset per outcome, single stack
     selectedOutcomes.forEach(o=>{
       datasets.push({
         label:o, stack:'combined',
         backgroundColor:COLORS[o],
         data:buckets.map(bk=>{
-          const tot=(denom['all']||{})[bk]||0;
-          const val=(agg['all']||{})[bk]?.[o]||0;
-          return tot>0?parseFloat((val/tot*100).toFixed(1)):0;
+          const bd=fullAgg['all']?.[bk]||{};
+          const tot=Object.values(bd).reduce((s,v)=>s+v,0);
+          return tot>0?parseFloat(((bd[o]||0)/tot*100).toFixed(1)):0;
         })
       });
     });
@@ -432,9 +417,9 @@ function renderPctChart(baseData) {
           borderWidth:3,
           borderSkipped:false,
           data:buckets.map(bk=>{
-            const tot=(denom[sv]||{})[bk]||0;
-            const val=(agg[sv]||{})[bk]?.[o]||0;
-            return tot>0?parseFloat((val/tot*100).toFixed(1)):0;
+            const bd=fullAgg[sv]?.[bk]||{};
+            const tot=Object.values(bd).reduce((s,v)=>s+v,0);
+            return tot>0?parseFloat(((bd[o]||0)/tot*100).toFixed(1)):0;
           })
         });
       });
